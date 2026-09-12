@@ -161,4 +161,4 @@ async def delete_command(interaction: discord.Interaction, 닉네임: str):
     else:
         await interaction.response.send_message(f"❌ `{name}` 님은 등록되어 있지 않습니다.", ephemeral=True)
 
-bot.run("YOUR TOKEN")
+bot.run(os.getenv("DISCORD_TOKEN"))
