@@ -10,7 +10,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from aiohttp import web
 
-# Render 가짜 웹 포트 바인딩 (Port Scan Timeout 방지)
+# Render 가짜 웹 포트 바인딩
 async def handle_ping(request):
     return web.Response(text="Bot is running!")
 
@@ -61,8 +61,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"로그인 성공: {bot.user.name}")
-    # 웹 포트 실행
-    await start_web_server()
+    # 웹 서버를 배경 태스크로 실행하여 봇 로직을 블로킹하지 않음
+    asyncio.create_task(start_web_server())
     try:
         synced = await bot.tree.sync()
         print(f"슬래시 명령어 {len(synced)}개 동기화 완료")
