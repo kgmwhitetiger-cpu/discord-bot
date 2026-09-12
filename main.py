@@ -3,12 +3,13 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import json
+import asyncio
 import traceback
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Firebase DB 초기화 (환경변수 안전 로드)
+# Firebase DB 초기화
 firebase_key_env = os.getenv("FIREBASE_KEY")
 
 if firebase_key_env:
@@ -16,7 +17,6 @@ if firebase_key_env:
     cred = credentials.Certificate(cred_dict)
     firebase_admin.initialize_app(cred)
 else:
-    # 로컬 테스트용
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     KEY_PATH = os.path.join(BASE_DIR, "firebase_key.json")
     cred = credentials.Certificate(KEY_PATH)
@@ -65,6 +65,7 @@ async def report_command(
     사유: str, 
     이미지: discord.Attachment = None
 ):
+    # 가장 먼저 defer() 호출하여 디스코드 3초 타임아웃 방지
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -74,7 +75,9 @@ async def report_command(
         today = datetime.now().strftime("%Y-%m-%d")
 
         doc_ref = db.collection("reports").document(name)
-        doc = doc_ref.get()
+        
+        # Firestore 조회를 비동기로 처리하여 메인 루프 멈춤 방지
+        doc = await asyncio.to_thread(doc_ref.get)
 
         if doc.exists:
             data = doc.to_dict()
@@ -95,7 +98,8 @@ async def report_command(
             data["history"] = {}
         data["history"][reporter_id] = today
         
-        doc_ref.set(data)
+        # Firestore 저장도 비동기 처리
+        await asyncio.to_thread(doc_ref.set, data)
 
         current_count = data["count"]
         goa_level = get_goa_level(current_count)
@@ -131,7 +135,7 @@ async def report_command(
 async def list_command(interaction: discord.Interaction):
     await interaction.response.defer()
 
-    docs = db.collection("reports").stream()
+    docs = await asyncio.to_thread(lambda: list(db.collection("reports").stream()))
     has_data = False
 
     embed = discord.Embed(
@@ -164,8 +168,9 @@ async def delete_command(interaction: discord.Interaction, 닉네임: str):
     name = 닉네임.strip()
     doc_ref = db.collection("reports").document(name)
     
-    if doc_ref.get().exists:
-        doc_ref.delete()
+    doc = await asyncio.to_thread(doc_ref.get)
+    if doc.exists:
+        await asyncio.to_thread(doc_ref.delete)
         await interaction.followup.send(f"✅ `{name}` 님의 신고 데이터가 삭제되었습니다.", ephemeral=True)
     else:
         await interaction.followup.send(f"❌ `{name}` 님은 등록되어 있지 않습니다.", ephemeral=True)
