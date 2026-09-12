@@ -1,32 +1,19 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import json
 import os
 import traceback
 from datetime import datetime
+import firebase_admin
+from firebase_admin import credentials, firestore
 
+# Firebase DB 초기화
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(BASE_DIR, "goa_list.json")
+KEY_PATH = os.path.join(BASE_DIR, "firebase_key.json")
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"데이터 로드 에러: {e}")
-            return {}
-    return {}
-
-def save_data(data):
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"데이터 저장 실패: {e}")
-
-reports_db = load_data()
+cred = credentials.Certificate(KEY_PATH)
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
 def get_goa_level(count: int) -> str:
     if count >= 25:
@@ -69,7 +56,6 @@ async def report_command(
     사유: str, 
     이미지: discord.Attachment = None
 ):
-    # 3초 타임아웃 방지
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -78,28 +64,33 @@ async def report_command(
         reporter_id = str(interaction.user.id)
         today = datetime.now().strftime("%Y-%m-%d")
 
-        if name not in reports_db:
-            reports_db[name] = {"count": 0, "reasons": [], "history": {}}
+        doc_ref = db.collection("reports").document(name)
+        doc = doc_ref.get()
+
+        if doc.exists:
+            data = doc.to_dict()
+        else:
+            data = {"count": 0, "reasons": [], "history": {}}
 
         # 하루 1회 동일 유저 신고 제한 검사
-        user_history = reports_db[name].get("history", {})
-        if reporter_id in user_history and user_history[reporter_id] == today:
+        user_history = data.get("history", {})
+        if user_history.get(reporter_id) == today:
             await interaction.followup.send(
                 f"❌ 오늘 이미 `{name}` 님을 신고하셨습니다. (동일 대상은 하루 1회만 신고 가능)", 
                 ephemeral=True
             )
             return
 
-        # 신고 데이터 등록 및 오늘 날짜 기록
-        reports_db[name]["count"] += 1
-        reports_db[name]["reasons"].append(user_reason)
-        if "history" not in reports_db[name]:
-            reports_db[name]["history"] = {}
-        reports_db[name]["history"][reporter_id] = today
+        data["count"] += 1
+        data["reasons"].append(user_reason)
+        if "history" not in data:
+            data["history"] = {}
+        data["history"][reporter_id] = today
         
-        save_data(reports_db)
+        # Firebase Firestore 데이터베이스에 영구 저장
+        doc_ref.set(data)
 
-        current_count = reports_db[name]["count"]
+        current_count = data["count"]
         goa_level = get_goa_level(current_count)
 
         embed = discord.Embed(
@@ -133,17 +124,19 @@ async def report_command(
 async def list_command(interaction: discord.Interaction):
     await interaction.response.defer()
 
-    if not reports_db:
-        await interaction.followup.send("현재 등록된 명단이 없습니다.")
-        return
+    docs = db.collection("reports").stream()
+    has_data = False
 
     embed = discord.Embed(
         title="📋 고아헌터존 - 누적 신고 명단",
         color=discord.Color.dark_red()
     )
 
-    for name, data in reports_db.items():
-        count = data["count"]
+    for doc in docs:
+        has_data = True
+        name = doc.id
+        data = doc.to_dict()
+        count = data.get("count", 0)
         level = get_goa_level(count)
         embed.add_field(
             name=f"👤 {name}",
@@ -151,7 +144,10 @@ async def list_command(interaction: discord.Interaction):
             inline=False
         )
 
-    await interaction.followup.send(embed=embed)
+    if not has_data:
+        await interaction.followup.send("현재 등록된 명단이 없습니다.")
+    else:
+        await interaction.followup.send(embed=embed)
 
 # [관리자 전용] /신고삭제 명령어
 @bot.tree.command(name="신고삭제", description="[관리자 전용] 특정 유저의 신고 기록을 삭제합니다.")
@@ -159,9 +155,10 @@ async def list_command(interaction: discord.Interaction):
 async def delete_command(interaction: discord.Interaction, 닉네임: str):
     await interaction.response.defer(ephemeral=True)
     name = 닉네임.strip()
-    if name in reports_db:
-        del reports_db[name]
-        save_data(reports_db)
+    doc_ref = db.collection("reports").document(name)
+    
+    if doc_ref.get().exists:
+        doc_ref.delete()
         await interaction.followup.send(f"✅ `{name}` 님의 신고 데이터가 삭제되었습니다.", ephemeral=True)
     else:
         await interaction.followup.send(f"❌ `{name}` 님은 등록되어 있지 않습니다.", ephemeral=True)
