@@ -8,6 +8,21 @@ import traceback
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
+from aiohttp import web
+
+# Render 가짜 웹 포트 바인딩 (Port Scan Timeout 방지)
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"웹 바인딩 포트 {port} 오픈 완료")
 
 # Firebase DB 초기화
 firebase_key_env = os.getenv("FIREBASE_KEY")
@@ -46,6 +61,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"로그인 성공: {bot.user.name}")
+    # 웹 포트 실행
+    await start_web_server()
     try:
         synced = await bot.tree.sync()
         print(f"슬래시 명령어 {len(synced)}개 동기화 완료")
@@ -65,7 +82,6 @@ async def report_command(
     사유: str, 
     이미지: discord.Attachment = None
 ):
-    # 가장 먼저 defer() 호출하여 디스코드 3초 타임아웃 방지
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -75,8 +91,6 @@ async def report_command(
         today = datetime.now().strftime("%Y-%m-%d")
 
         doc_ref = db.collection("reports").document(name)
-        
-        # Firestore 조회를 비동기로 처리하여 메인 루프 멈춤 방지
         doc = await asyncio.to_thread(doc_ref.get)
 
         if doc.exists:
@@ -98,7 +112,6 @@ async def report_command(
             data["history"] = {}
         data["history"][reporter_id] = today
         
-        # Firestore 저장도 비동기 처리
         await asyncio.to_thread(doc_ref.set, data)
 
         current_count = data["count"]
