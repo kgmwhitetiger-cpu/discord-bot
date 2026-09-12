@@ -2,17 +2,26 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import os
+import json
 import traceback
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Firebase DB 초기화
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-KEY_PATH = os.path.join(BASE_DIR, "firebase_key.json")
+# Firebase DB 초기화 (환경변수 안전 로드)
+firebase_key_env = os.getenv("FIREBASE_KEY")
 
-cred = credentials.Certificate(KEY_PATH)
-firebase_admin.initialize_app(cred)
+if firebase_key_env:
+    cred_dict = json.loads(firebase_key_env)
+    cred = credentials.Certificate(cred_dict)
+    firebase_admin.initialize_app(cred)
+else:
+    # 로컬 테스트용
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    KEY_PATH = os.path.join(BASE_DIR, "firebase_key.json")
+    cred = credentials.Certificate(KEY_PATH)
+    firebase_admin.initialize_app(cred)
+
 db = firestore.client()
 
 def get_goa_level(count: int) -> str:
@@ -72,7 +81,6 @@ async def report_command(
         else:
             data = {"count": 0, "reasons": [], "history": {}}
 
-        # 하루 1회 동일 유저 신고 제한 검사
         user_history = data.get("history", {})
         if user_history.get(reporter_id) == today:
             await interaction.followup.send(
@@ -87,7 +95,6 @@ async def report_command(
             data["history"] = {}
         data["history"][reporter_id] = today
         
-        # Firebase Firestore 데이터베이스에 영구 저장
         doc_ref.set(data)
 
         current_count = data["count"]
